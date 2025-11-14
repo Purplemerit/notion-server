@@ -247,8 +247,19 @@ export class AuthService {
   ) {
     const user = await this.usersService.findByEmail(email);
 
-    if (!user || !user.password) {
+    if (!user) {
       // Don't reveal whether user exists
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    // Check if user signed up with OAuth provider
+    if (!user.password && user.provider !== 'local') {
+      throw new UnauthorizedException(
+        `This account uses ${user.provider} authentication. Please login with ${user.provider}.`
+      );
+    }
+
+    if (!user.password) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -333,6 +344,16 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
+    // Revoke the old refresh token (rotation for security)
+    await this.refreshTokenService.revokeToken(refreshToken);
+
+    // Generate new refresh token
+    const newRefreshToken = await this.refreshTokenService.createRefreshToken(
+      (user as any)._id.toString(),
+      ipAddress,
+      userAgent,
+    );
+
     const payload = {
       sub: (user as any)._id.toString(),
       email: user.email,
@@ -352,7 +373,7 @@ export class AuthService {
       isSuccessful: true,
     });
 
-    return { accessToken };
+    return { accessToken, refreshToken: newRefreshToken.token };
   }
 
   /**

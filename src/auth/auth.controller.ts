@@ -19,10 +19,14 @@ import { SignupDto } from './dto/signup.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { Verify2FADto } from './dto/verify-2fa.dto';
 import { JwtAuthGuard } from './jwt.guard';
+import { OAuthSessionService } from './services/oauth-session.service';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly oauthSessionService: OAuthSessionService,
+  ) {}
 
   /**
    * Initiates Google OAuth2 login flow
@@ -66,7 +70,7 @@ export class AuthController {
     
     res.cookie('accessToken', accessToken, {
       ...cookieOptions,
-      maxAge: 15 * 60 * 1000, // 15 minutes
+      maxAge: 4 * 60 * 60 * 1000, // 4 hours
     });
 
     res.cookie('refreshToken', refreshToken, {
@@ -74,9 +78,39 @@ export class AuthController {
       maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
     });
 
-    // Redirect to frontend without token in URL
+    // Redirect to frontend
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
-    return res.redirect(`${frontendUrl}/dashboard`);
+
+    // Development: Include tokens in URL directly (for easier debugging)
+    if (!isProduction) {
+      return res.redirect(`${frontendUrl}/success?accessToken=${accessToken}&refreshToken=${refreshToken}`);
+    }
+
+    // Production: Use one-time session code to prevent token leakage in browser history
+    const sessionCode = this.oauthSessionService.createSession(accessToken, refreshToken);
+    return res.redirect(`${frontendUrl}/success?code=${sessionCode}`);
+  }
+
+  /**
+   * Exchange OAuth session code for tokens (one-time use)
+   */
+  @Post('exchange-code')
+  @HttpCode(HttpStatus.OK)
+  async exchangeCode(@Body('code') code: string) {
+    if (!code) {
+      throw new BadRequestException('Session code is required');
+    }
+
+    const tokens = this.oauthSessionService.consumeSession(code);
+
+    if (!tokens) {
+      throw new BadRequestException('Invalid or expired session code');
+    }
+
+    return {
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    };
   }
 
   /**
@@ -109,7 +143,7 @@ export class AuthController {
     
     res.cookie('accessToken', result.accessToken, {
       ...cookieOptions,
-      maxAge: 15 * 60 * 1000,
+      maxAge: 4 * 60 * 60 * 1000, // 4 hours
     });
 
     res.cookie('refreshToken', result.refreshToken, {
@@ -167,7 +201,7 @@ export class AuthController {
       
       res.cookie('accessToken', result.accessToken, {
         ...cookieOptions,
-        maxAge: 15 * 60 * 1000,
+        maxAge: 4 * 60 * 60 * 1000, // 4 hours
       });
 
       res.cookie('refreshToken', result.refreshToken, {
@@ -240,8 +274,10 @@ export class AuthController {
    */
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  async refreshToken(@Req() req: Request, @Res() res: Response) {
-    const refreshToken = req.cookies?.refreshToken;
+  async refreshToken(@Req() req: Request, @Res() res: Response, @Body()
+  body?: RefreshTokenDto) {
+    // Support both cookie-based and localStorage-based auth
+    const refreshToken = req.cookies?.refreshToken || body?.refreshToken;
 
     if (!refreshToken) {
       throw new BadRequestException('Refresh token not found');
@@ -250,14 +286,14 @@ export class AuthController {
     const ipAddress = req.ip;
     const userAgent = req.headers['user-agent'];
 
-    const { accessToken } = await this.authService.refreshAccessToken(
+    const { accessToken, refreshToken: newRefreshToken } = await this.authService.refreshAccessToken(
       refreshToken,
       ipAddress,
       userAgent,
     );
 
     const isProduction = process.env.NODE_ENV === 'production';
-    
+
     const cookieOptions: any = {
       httpOnly: true,
       secure: isProduction,
@@ -269,13 +305,18 @@ export class AuthController {
     if (isProduction) {
       cookieOptions.partitioned = true;
     }
-    
+
     res.cookie('accessToken', accessToken, {
       ...cookieOptions,
-      maxAge: 15 * 60 * 1000,
+      maxAge: 4 * 60 * 60 * 1000, // 4 hours
     });
 
-    return res.json({ success: true });
+    res.cookie('refreshToken', newRefreshToken, {
+      ...cookieOptions,
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    });
+
+    return res.json({ success: true, accessToken, refreshToken: newRefreshToken });
   }
 
   /**
@@ -293,8 +334,21 @@ export class AuthController {
       await this.authService.logout(accessToken, refreshToken, userId);
     }
 
-    res.clearCookie('accessToken');
-    res.clearCookie('refreshToken');
+    // Clear cookies with the SAME options they were set with
+    const isProduction = process.env.NODE_ENV === 'production';
+    const cookieOptions: any = {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax',
+      path: '/',
+    };
+
+    if (isProduction) {
+      cookieOptions.partitioned = true;
+    }
+
+    res.clearCookie('accessToken', cookieOptions);
+    res.clearCookie('refreshToken', cookieOptions);
 
     return res.json({ success: true });
   }

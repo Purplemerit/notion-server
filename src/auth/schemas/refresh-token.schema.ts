@@ -17,6 +17,9 @@ export class RefreshToken {
   @Prop({ default: false })
   isRevoked: boolean;
 
+  @Prop({ type: Date })
+  revokedAt?: Date;
+
   @Prop()
   ipAddress?: string;
 

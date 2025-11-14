@@ -20,7 +20,7 @@ import { AwsS3Service } from 'src/aws/aws-s3.service';
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET'),
-        signOptions: { expiresIn: '15m' },
+        signOptions: { expiresIn: '4h' },  // 4 hours - extended for long sessions
       }),
       inject: [ConfigService],
     }),

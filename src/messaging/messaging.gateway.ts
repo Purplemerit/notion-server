@@ -10,6 +10,8 @@ import {
 import { Server, Socket } from 'socket.io';
 import { MessagingService } from './messaging.service';
 import { UseGuards } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 
 @WebSocketGateway({
   cors: {
@@ -25,30 +27,92 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // Store user ID to socket ID mapping
   private userSockets = new Map<string, string>();
 
-  constructor(private readonly messagingService: MessagingService) {}
+  constructor(
+    private readonly messagingService: MessagingService,
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+  ) {}
 
-  handleConnection(client: Socket) {
-    console.log(`Client connected: ${client.id}`);
+  private extractTokenFromCookies(cookieHeader: string | undefined): string | null {
+    if (!cookieHeader) return null;
 
-    // Store user ID from handshake auth
-    const userId = client.handshake.auth?.userId;
-    if (userId) {
+    const cookies = cookieHeader.split(';').reduce((acc, cookie) => {
+      const [key, value] = cookie.trim().split('=');
+      acc[key] = value;
+      return acc;
+    }, {} as Record<string, string>);
+
+    return cookies['accessToken'] || null;
+  }
+
+  async handleConnection(client: Socket) {
+    // Try to get token from cookies first (HTTP-only cookie auth)
+    const cookieHeader = client.handshake.headers.cookie;
+    let token = this.extractTokenFromCookies(cookieHeader);
+
+    // Fallback to query parameter for backwards compatibility
+    if (!token) {
+      const queryToken = client.handshake.query.token;
+      token = Array.isArray(queryToken)
+        ? queryToken[0]
+        : (queryToken || null);
+    }
+
+    if (!token) {
+      console.error('Messaging auth failed: Token is required');
+      client.emit('error', {
+        message: 'Authentication required',
+        code: 'AUTH_TOKEN_REQUIRED',
+        requiresLogin: true
+      });
+      setTimeout(() => client.disconnect(), 100);
+      return;
+    }
+
+    try {
+      const decoded = this.jwtService.verify(token, {
+        secret: this.configService.get<string>('JWT_SECRET'),
+      });
+
+      const userId = decoded.sub;
+      const email = decoded.email;
+
+      if (!userId) {
+        console.error('Messaging auth failed: Invalid token');
+        client.emit('error', {
+          message: 'Invalid token',
+          code: 'AUTH_INVALID_TOKEN',
+          requiresLogin: true
+        });
+        setTimeout(() => client.disconnect(), 100);
+        return;
+      }
+
+      // Store authenticated user info
       this.userSockets.set(userId, client.id);
-      console.log(`User ${userId} connected with socket ${client.id}`);
+      (client as any).userId = userId;
+      (client as any).email = email;
+
 
       // Join user to their personal room
       client.join(`user:${userId}`);
+    } catch (error) {
+      console.error('Messaging auth failed', error);
+      client.emit('error', {
+        message: 'Invalid or expired token',
+        code: 'AUTH_TOKEN_EXPIRED',
+        requiresLogin: true
+      });
+      setTimeout(() => client.disconnect(), 100);
     }
   }
 
   handleDisconnect(client: Socket) {
-    console.log(`Client disconnected: ${client.id}`);
 
     // Remove user from mapping
     const userId = client.handshake.auth?.userId;
     if (userId) {
       this.userSockets.delete(userId);
-      console.log(`User ${userId} disconnected`);
     }
   }
 

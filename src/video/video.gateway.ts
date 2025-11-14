@@ -8,6 +8,8 @@ import {
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 
 interface RoomParticipant {
   socketId: string;
@@ -29,12 +31,68 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // Track participants in each room
   private rooms: Map<string, RoomParticipant[]> = new Map();
 
-  handleConnection(client: Socket) {
-    console.log(`✅ Client connected to video namespace: ${client.id}`);
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+  ) {}
+
+  private extractTokenFromCookies(cookieHeader: string | undefined): string | null {
+    if (!cookieHeader) return null;
+
+    const cookies = cookieHeader.split(';').reduce((acc, cookie) => {
+      const [key, value] = cookie.trim().split('=');
+      acc[key] = value;
+      return acc;
+    }, {} as Record<string, string>);
+
+    return cookies['accessToken'] || null;
+  }
+
+  async handleConnection(client: Socket) {
+    // Try to get token from cookies first (HTTP-only cookie auth)
+    const cookieHeader = client.handshake.headers.cookie;
+    let token = this.extractTokenFromCookies(cookieHeader);
+
+    // Fallback to query parameter for backwards compatibility
+    if (!token) {
+      const queryToken = client.handshake.query.token;
+      token = Array.isArray(queryToken)
+        ? queryToken[0]
+        : (queryToken || null);
+    }
+
+    // Optional auth: If token provided, verify it. If not, allow anonymous connection.
+    if (token) {
+      try {
+        const decoded = this.jwtService.verify(token, {
+          secret: this.configService.get<string>('JWT_SECRET'),
+        });
+
+        // Store user info in socket for later use
+        (client as any).userId = decoded.sub;
+        (client as any).email = decoded.email;
+        (client as any).isAuthenticated = true;
+
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`✅ Video socket authenticated: ${decoded.email}`);
+        }
+      } catch (error) {
+        // Token provided but invalid - log warning but allow connection
+        if (process.env.NODE_ENV === 'development') {
+          console.warn('⚠️ Video auth failed, allowing anonymous connection:', error.message);
+        }
+        (client as any).isAuthenticated = false;
+      }
+    } else {
+      // No token provided - allow anonymous connection
+      if (process.env.NODE_ENV === 'development') {
+        console.log('ℹ️ Video socket connected anonymously');
+      }
+      (client as any).isAuthenticated = false;
+    }
   }
 
   handleDisconnect(client: Socket) {
-    console.log(`❌ Client disconnected from video namespace: ${client.id}`);
 
     // Remove client from all rooms
     this.rooms.forEach((participants, roomName) => {
@@ -45,7 +103,6 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         // Notify other participants that someone left
         client.to(roomName).emit('user_left', { userId: client.id });
 
-        console.log(`🚪 Client ${client.id} removed from room: ${roomName}`);
       }
     });
   }
@@ -73,8 +130,6 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     };
     participants.push(newParticipant);
 
-    console.log(`🚪 Client ${socket.id} joined room: ${roomName}`);
-    console.log(`👥 Room ${roomName} now has ${participants.length} participants`);
 
     // Send existing participants to the new user
     const existingParticipants = participants
@@ -99,7 +154,6 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     },
     @ConnectedSocket() socket: Socket,
   ) {
-    console.log(`📡 Received offer from ${socket.id} for ${data.targetSocketId} in room ${data.roomName}`);
 
     // Send offer to specific participant
     this.server.to(data.targetSocketId).emit('connection_offer', {
@@ -117,7 +171,6 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     },
     @ConnectedSocket() socket: Socket,
   ) {
-    console.log(`📡 Received answer from ${socket.id} for ${data.targetSocketId} in room ${data.roomName}`);
 
     // Send answer to specific participant
     this.server.to(data.targetSocketId).emit('answer', {
@@ -135,7 +188,6 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     },
     @ConnectedSocket() socket: Socket,
   ) {
-    console.log(`🧊 Received ICE candidate from ${socket.id} for ${data.targetSocketId} in room ${data.roomName}`);
 
     // Send ICE candidate to specific participant
     this.server.to(data.targetSocketId).emit('candidate', {
@@ -157,7 +209,6 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
     }
 
-    console.log(`🚪 Client ${socket.id} left room: ${roomName}`);
 
     // Notify others that user left
     socket.to(roomName).emit('user_left', { socketId: socket.id });

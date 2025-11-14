@@ -12,6 +12,9 @@ import { ConfigService } from '@nestjs/config';
 import { UnauthorizedException } from '@nestjs/common';
 import { AwsS3Service } from 'src/aws/aws-s3.service';
 import { ChatService } from './chat.service';
+import { TokenBlacklistService } from '../auth/services/token-blacklist.service';
+import { RefreshTokenService } from '../auth/services/refresh-token.service';
+import { AuthService } from '../auth/auth.service';
 import { Buffer } from 'buffer';
 import { Readable } from 'stream';
 
@@ -29,8 +32,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
-    private readonly s3Service: AwsS3Service, // ✅ Injected S3 service
-    private readonly chatService: ChatService, // ✅ Injected Chat service
+    private readonly s3Service: AwsS3Service,
+    private readonly chatService: ChatService,
+    private readonly tokenBlacklistService: TokenBlacklistService,
+    private readonly refreshTokenService: RefreshTokenService,
+    private readonly authService: AuthService,
   ) {}
 
   private extractTokenFromCookies(cookieHeader: string | undefined): string | null {
@@ -87,17 +93,27 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
 
+      // ✅ Check if token is blacklisted
+      const isBlacklisted = await this.tokenBlacklistService.isTokenBlacklisted(token);
+      if (isBlacklisted) {
+        console.error('Chat authentication failed: Token is blacklisted');
+        client.emit('error', {
+          message: 'Token has been revoked',
+          code: 'AUTH_TOKEN_REVOKED',
+          requiresLogin: true
+        });
+        setTimeout(() => client.disconnect(), 100);
+        return;
+      }
+
       this.users.set(email, client);
       this.userEmails.set(client.id, email);
-
-      console.log(`Client connected: ${email}`);
 
       // ✅ Send any unread PRIVATE messages to the user upon connection
       // This enables offline message delivery - messages sent while user was offline
       // The improved deduplication (using MongoDB IDs + createdAt) prevents duplicates
       const unreadMessages = await this.chatService.getUnreadMessages(email);
       if (unreadMessages.length > 0) {
-        console.log(`Delivering ${unreadMessages.length} unread private messages to ${email}`);
         for (const message of unreadMessages) {
           const messagePayload = {
             sender: message.sender,
@@ -127,7 +143,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // ✅ Send any undelivered GROUP messages to the user upon connection
       const unreadGroupMessages = await this.chatService.getUndeliveredGroupMessages(email);
       if (unreadGroupMessages.length > 0) {
-        console.log(`Delivering ${unreadGroupMessages.length} unread group messages to ${email}`);
         for (const message of unreadGroupMessages) {
           const messagePayload = {
             sender: message.sender,
@@ -167,7 +182,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (email) {
       this.users.delete(email);
       this.userEmails.delete(client.id);
-      console.log(`Client disconnected: ${email}`);
     }
   }
 
@@ -204,10 +218,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // ✅ Receiver is online - send immediately and mark as delivered
       receiverSocket.emit('message', messagePayload);
       await this.chatService.markAsDelivered((savedMessage as any)._id.toString());
-      console.log(`Private message from ${sender} to ${receiver}: ${text} - Delivered`);
     } else {
       // ✅ Receiver is offline - message is saved and will be delivered when they connect
-      console.log(`Private message from ${sender} to ${receiver}: ${text} - Saved for later delivery`);
     }
 
     // ✅ Send confirmation back to sender with saved flag
@@ -228,7 +240,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const { groupName } = data;
 
     client.join(groupName);
-    console.log(`Client ${client.id} created and joined group: ${groupName}`);
     client.emit('groupCreated', { groupName });
   }
 
@@ -243,7 +254,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const { groupName } = data;
 
     client.join(groupName);
-    console.log(`Client ${client.id} joined group: ${groupName}`);
     client.emit('groupJoined', { groupName });
   }
 
@@ -258,7 +268,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const { groupName } = data;
 
     client.leave(groupName);
-    console.log(`Client ${client.id} left group: ${groupName}`);
     client.emit('groupLeft', { groupName });
   }
 
@@ -295,7 +304,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // ✅ Send confirmation back to sender
     client.emit('groupMessage:sent', groupPayload);
 
-    console.log(`Group message in ${groupName} from ${sender}: ${text}`);
   }
 
   /**
@@ -311,10 +319,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     if (calleeSocket) {
       calleeSocket.emit('call:incoming', { caller, offer, callType });
-      console.log(`Call initiated from ${caller} to ${callee} (${callType})`);
     } else {
       client.emit('call:error', { message: `User ${callee} is not available` });
-      console.log(`Call failed: ${callee} is not connected`);
     }
   }
 
@@ -331,7 +337,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     if (callerSocket) {
       callerSocket.emit('call:answered', { callee, answer });
-      console.log(`Call answered by ${callee} to ${caller}`);
     } else {
       client.emit('call:error', { message: `User ${caller} disconnected` });
     }
@@ -350,7 +355,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     if (receiverSocket) {
       receiverSocket.emit('call:iceCandidate', { sender, candidate });
-      console.log(`ICE candidate sent from ${sender} to ${receiver}`);
     }
   }
 
@@ -367,7 +371,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     if (callerSocket) {
       callerSocket.emit('call:rejected', { callee, reason: reason || 'User declined the call' });
-      console.log(`Call rejected by ${callee} to ${caller}`);
     }
   }
 
@@ -385,7 +388,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     if (otherUserSocket) {
       otherUserSocket.emit('call:ended', { endedBy: this.userEmails.get(client.id) });
-      console.log(`Call ended between ${caller} and ${callee}`);
     }
   }
 
@@ -406,11 +408,9 @@ async handleUploadMedia(
   },
   @ConnectedSocket() client: Socket,
 ) {
-  console.log('Received uploadMedia event with data:', data);
   const { sender, receiver, groupName, fileName, fileType, fileBase64, mode } = data;
 
   try {
-    console.log(`Starting media upload for ${sender} - File: ${fileName}, Type: ${fileType}, Mode: ${mode}`);
 
     const buffer = Buffer.from(fileBase64, 'base64');
     const readableStream = new Readable();
@@ -432,7 +432,6 @@ async handleUploadMedia(
 
     const mediaUrl = await this.s3Service.uploadFile(fakeFile);
 
-    console.log(`Upload successful! Media URL: ${mediaUrl}`);
 
     // ✅ Save media message to database
     const savedMessage = await this.chatService.saveMessage({
@@ -465,7 +464,6 @@ async handleUploadMedia(
         receiverSocket.emit('mediaMessage', messagePayload);
         await this.chatService.markAsDelivered((savedMessage as any)._id.toString());
       } else {
-        console.log(`Media message saved for offline receiver: ${receiver}`);
       }
       // ✅ Send confirmation back to sender (consistent with text messages)
       client.emit('mediaMessage:sent', {
@@ -479,11 +477,71 @@ async handleUploadMedia(
       client.emit('mediaMessage:sent', messagePayload);
     } else {
       client.emit('error', 'Invalid media message data');
-      console.log('Invalid media message data: missing receiver or groupName');
     }
   } catch (error) {
     console.error('Media upload failed:', error);
     client.emit('error', 'Media upload failed');
   }
 }
+
+  /**
+   * TOKEN REFRESH - Allows refreshing access token without disconnecting
+   */
+  @SubscribeMessage('refresh_token')
+  async handleTokenRefresh(
+    @MessageBody() data: { refreshToken: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    try {
+
+      if (!data.refreshToken) {
+        client.emit('error', {
+          message: 'Refresh token is required',
+          code: 'AUTH_REFRESH_TOKEN_REQUIRED',
+          requiresLogin: true
+        });
+        return;
+      }
+
+      // Call the refresh token service
+      const { accessToken } = await this.authService.refreshAccessToken(
+        data.refreshToken,
+        client.handshake.address,
+        client.handshake.headers['user-agent'],
+      );
+
+      // Verify new token and update user mapping
+      const decoded = this.jwtService.verify(accessToken, {
+        secret: this.configService.get<string>('JWT_SECRET'),
+      });
+
+      const email = decoded.email;
+
+      if (!email) {
+        client.emit('error', {
+          message: 'Invalid token received',
+          code: 'AUTH_INVALID_TOKEN',
+          requiresLogin: true
+        });
+        return;
+      }
+
+      // Update the connection with new token
+      this.users.set(email, client);
+      this.userEmails.set(client.id, email);
+
+      // Send new token back to client
+      client.emit('token_refreshed', { accessToken });
+
+      return { success: true };
+    } catch (error) {
+      console.error('Token refresh failed:', error);
+      client.emit('error', {
+        message: 'Token refresh failed. Please login again.',
+        code: 'AUTH_REFRESH_FAILED',
+        requiresLogin: true
+      });
+      setTimeout(() => client.disconnect(), 100);
+    }
+  }
 }

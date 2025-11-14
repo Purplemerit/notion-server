@@ -21,7 +21,7 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
 
   async validate(accessToken: string, refreshToken: string, profile: any, done: VerifyCallback): Promise<any> {
     this.logger.debug(`Google OAuth validation for user: ${profile.emails?.[0]?.value}`, 'GoogleStrategy');
-    await this.authService.validateOAuthLogin(profile); // Call to ensure user is created
-    done(null, profile); // Pass raw profile to req.user
+    // Just pass the profile to the controller - user creation/token generation happens there
+    done(null, profile);
   }
 }

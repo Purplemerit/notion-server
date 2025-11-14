@@ -15,6 +15,7 @@ import { AuditLog, AuditLogSchema } from './schemas/audit-log.schema';
 import { RefreshTokenService } from './services/refresh-token.service';
 import { TokenBlacklistService } from './services/token-blacklist.service';
 import { AuditLogService } from './services/audit-log.service';
+import { OAuthSessionService } from './services/oauth-session.service';
 
 @Module({
   imports: [
@@ -31,7 +32,7 @@ import { AuditLogService } from './services/audit-log.service';
       inject: [ConfigService],
       useFactory: async (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET'),
-        signOptions: { expiresIn: '15m' },  // Short-lived access tokens
+        signOptions: { expiresIn: '4h' },  // 4 hours - extended for long sessions
       }),
     }),
     ThrottlerModule.forRoot([{
@@ -46,6 +47,7 @@ import { AuditLogService } from './services/audit-log.service';
     RefreshTokenService,
     TokenBlacklistService,
     AuditLogService,
+    OAuthSessionService,
   ],
   controllers: [AuthController],
   exports: [AuthService, AuditLogService, TokenBlacklistService, RefreshTokenService],
