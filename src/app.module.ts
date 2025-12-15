@@ -24,6 +24,7 @@ import { GmailModule } from './gmail/gmail.module';
 import { MessagingModule } from './messaging/messaging.module';
 import { CollectionModule } from './collections/collection.module';
 import { KanbanModule } from './kanban/kanban.module';
+import { WhiteboardModule } from './whiteboard/whiteboard.module';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { KanbanModule } from './kanban/kanban.module';
     MessagingModule,
     CollectionModule,
     KanbanModule,
+    WhiteboardModule,
   ],
   controllers: [AppController],
   providers: [AppService, AwsS3Service],

@@ -109,6 +109,15 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.users.set(email, client);
       this.userEmails.set(client.id, email);
 
+      console.log(`User ${email} connected. Total online users: ${this.users.size}`);
+
+      // ✅ Broadcast user online status to all connected clients
+      client.broadcast.emit('user:online', { email });
+
+      // ✅ Send list of currently online users to the newly connected user
+      const onlineUsers = Array.from(this.users.keys());
+      client.emit('users:online', { users: onlineUsers });
+
       // ✅ Send any unread PRIVATE messages to the user upon connection
       // This enables offline message delivery - messages sent while user was offline
       // The improved deduplication (using MongoDB IDs + createdAt) prevents duplicates
@@ -182,6 +191,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (email) {
       this.users.delete(email);
       this.userEmails.delete(client.id);
+
+      console.log(`User ${email} disconnected. Total online users: ${this.users.size}`);
+
+      // ✅ Broadcast user offline status to all connected clients
+      client.broadcast.emit('user:offline', { email });
     }
   }
 
