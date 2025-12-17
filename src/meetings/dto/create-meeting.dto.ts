@@ -29,6 +29,10 @@ export class CreateMeetingDto {
   @IsOptional()
   relatedProjects?: string[];
 
+  @IsArray()
+  @IsOptional()
+  participants?: string[];
+
   @IsBoolean()
   @IsOptional()
   requiresAuth?: boolean;

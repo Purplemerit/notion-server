@@ -145,6 +145,15 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
       const receiverSocketId = this.userSockets.get(data.receiverId);
       if (receiverSocketId) {
         this.server.to(receiverSocketId).emit('newMessage', message);
+
+        // Get updated unread count for receiver
+        const unreadCount = await this.messagingService.getUnreadCount(
+          // Need to convert receiverId to email - we'll use the receiver's email from the populated message
+          (message.receiverId as any).email || data.receiverId
+        );
+
+        // Emit unread count update to receiver
+        this.server.to(receiverSocketId).emit('unreadCountUpdate', unreadCount);
       }
 
       // Emit back to sender for confirmation
@@ -198,6 +207,35 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
           });
         }
       }
+
+      // Get updated unread count for the user who marked as read
+      const unreadCount = await this.messagingService.getUnreadCount(data.userEmail);
+
+      // Emit unread count update to the user
+      client.emit('unreadCountUpdate', unreadCount);
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Handle mark conversation as read
+   */
+  @SubscribeMessage('markConversationAsRead')
+  async handleMarkConversationAsRead(
+    @MessageBody() data: { userEmail: string; otherUserId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    try {
+      await this.messagingService.markConversationAsRead(data.userEmail, data.otherUserId);
+
+      // Get updated unread count for the user
+      const unreadCount = await this.messagingService.getUnreadCount(data.userEmail);
+
+      // Emit unread count update to the user
+      client.emit('unreadCountUpdate', unreadCount);
 
       return { success: true };
     } catch (error) {

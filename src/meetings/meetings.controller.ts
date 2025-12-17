@@ -64,4 +64,19 @@ export class MeetingsController {
   joinMeeting(@Param('roomId') roomId: string, @Request() req) {
     return this.meetingsService.joinMeeting(roomId, req.user.sub);
   }
+
+  @Post(':id/start')
+  startMeeting(@Param('id') id: string, @Request() req) {
+    return this.meetingsService.startMeeting(id, req.user.sub);
+  }
+
+  @Post(':id/complete')
+  completeMeeting(@Param('id') id: string, @Body() transcriptData: any, @Request() req) {
+    return this.meetingsService.completeMeeting(id, transcriptData);
+  }
+
+  @Get(':id/transcript')
+  getMeetingTranscript(@Param('id') id: string, @Request() req) {
+    return this.meetingsService.getMeetingTranscript(id, req.user.sub);
+  }
 }

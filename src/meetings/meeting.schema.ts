@@ -42,6 +42,40 @@ export class Meeting extends Document {
     maxParticipants?: number;
     recordingEnabled?: boolean;
   };
+
+  // Meeting tracking
+  @Prop()
+  actualStartTime: Date;
+
+  @Prop()
+  actualEndTime: Date;
+
+  // Meeting transcript/summary
+  @Prop({ type: Object })
+  transcript: {
+    duration: number; // in minutes
+    tasksCompleted: Array<{
+      taskId?: Types.ObjectId;
+      title: string;
+      description?: string;
+      completedAt: Date;
+    }>;
+    tasksCreated: Array<{
+      taskId?: Types.ObjectId;
+      title: string;
+      description?: string;
+      assignedTo?: Types.ObjectId[];
+      createdAt: Date;
+    }>;
+    notes: string;
+    summary: string;
+    attendees: Array<{
+      userId: Types.ObjectId;
+      joinedAt: Date;
+      leftAt?: Date;
+      duration: number; // in minutes
+    }>;
+  };
 }
 
 export const MeetingSchema = SchemaFactory.createForClass(Meeting);
