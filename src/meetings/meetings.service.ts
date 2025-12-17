@@ -7,6 +7,7 @@ import { UpdateMeetingDto } from './dto/update-meeting.dto';
 import { NotificationsService } from './notifications.service';
 import * as crypto from 'crypto';
 
+
 @Injectable()
 export class MeetingsService {
   constructor(
@@ -14,13 +15,16 @@ export class MeetingsService {
     private notificationsService: NotificationsService,
   ) {}
 
+
   private generateRoomId(): string {
     // Generate a URL-safe random string
     return crypto.randomBytes(9).toString('base64url').slice(0, 12);
   }
 
+
   async create(createMeetingDto: CreateMeetingDto, userId: string): Promise<Meeting> {
     const roomId = this.generateRoomId(); // Generate unique room ID
+
 
     const meeting = new this.meetingModel({
       ...createMeetingDto,
@@ -34,7 +38,9 @@ export class MeetingsService {
       },
     });
 
+
     const savedMeeting = await meeting.save();
+
 
     // Create notifications for all participants
     const populatedMeeting = await this.meetingModel
@@ -42,9 +48,10 @@ export class MeetingsService {
       .populate('createdBy participants')
       .exec();
 
+
     if (populatedMeeting && populatedMeeting.participants.length > 0) {
       await this.notificationsService.createMeetingScheduledNotifications(
-        savedMeeting._id,
+        savedMeeting._id as Types.ObjectId,
         {
           title: savedMeeting.title,
           roomId: savedMeeting.roomId,
@@ -57,8 +64,10 @@ export class MeetingsService {
       );
     }
 
+
     return savedMeeting;
   }
+
 
   async findAll(userId: string): Promise<Meeting[]> {
     return this.meetingModel
@@ -76,6 +85,7 @@ export class MeetingsService {
       .exec();
   }
 
+
   async findOne(id: string): Promise<Meeting> {
     const meeting = await this.meetingModel
       .findById(id)
@@ -85,12 +95,15 @@ export class MeetingsService {
       .populate('relatedProjects', 'name status')
       .exec();
 
+
     if (!meeting) {
       throw new NotFoundException('Meeting not found');
     }
 
+
     return meeting;
   }
+
 
   async findByRoomId(roomId: string): Promise<Meeting> {
     const meeting = await this.meetingModel
@@ -101,48 +114,61 @@ export class MeetingsService {
       .populate('relatedProjects', 'name status')
       .exec();
 
+
     if (!meeting) {
       throw new NotFoundException('Meeting not found');
     }
+
 
     return meeting;
   }
 
+
   async update(id: string, updateMeetingDto: UpdateMeetingDto, userId: string): Promise<Meeting> {
     const meeting = await this.meetingModel.findById(id);
+
 
     if (!meeting) {
       throw new NotFoundException('Meeting not found');
     }
+
 
     if (meeting.createdBy.toString() !== userId) {
       throw new ForbiddenException('You can only update meetings you created');
     }
 
+
     Object.assign(meeting, updateMeetingDto);
     return meeting.save();
   }
 
+
   async delete(id: string, userId: string): Promise<void> {
     const meeting = await this.meetingModel.findById(id);
+
 
     if (!meeting) {
       throw new NotFoundException('Meeting not found');
     }
+
 
     if (meeting.createdBy.toString() !== userId) {
       throw new ForbiddenException('You can only delete meetings you created');
     }
 
+
     await meeting.deleteOne();
   }
+
 
   async joinMeeting(roomId: string, userId: string): Promise<Meeting> {
     const meeting = await this.meetingModel.findOne({ roomId });
 
+
     if (!meeting) {
       throw new NotFoundException('Meeting not found');
     }
+
 
     // Add user to participants if not already there
     if (!meeting.participants.includes(userId as any)) {
@@ -150,11 +176,13 @@ export class MeetingsService {
       await meeting.save();
     }
 
+
     // Update status to ongoing if it's scheduled
     if (meeting.status === 'scheduled') {
       meeting.status = 'ongoing';
       await meeting.save();
     }
+
 
     const updatedMeeting = await this.meetingModel
       .findById(meeting._id)
@@ -164,17 +192,21 @@ export class MeetingsService {
       .populate('relatedProjects', 'name status')
       .exec();
 
+
     if (!updatedMeeting) {
       throw new NotFoundException('Meeting not found after update');
     }
 
+
     return updatedMeeting;
   }
+
 
   async getUpcoming(userId: string, days: number = 7): Promise<Meeting[]> {
     const now = new Date();
     const futureDate = new Date();
     futureDate.setDate(futureDate.getDate() + days);
+
 
     return this.meetingModel
       .find({
@@ -196,23 +228,29 @@ export class MeetingsService {
       .exec();
   }
 
+
   async startMeeting(meetingId: string, userId: string): Promise<Meeting> {
     const meeting = await this.meetingModel.findById(meetingId);
+
 
     if (!meeting) {
       throw new NotFoundException('Meeting not found');
     }
 
+
     meeting.status = 'ongoing';
     meeting.actualStartTime = new Date();
 
+
     await meeting.save();
+
 
     // Notify all participants that meeting has started
     const populatedMeeting = await this.meetingModel
       .findById(meetingId)
       .populate('participants')
       .exec();
+
 
     if (populatedMeeting) {
       await this.notificationsService.createMeetingStartedNotifications(
@@ -225,8 +263,10 @@ export class MeetingsService {
       );
     }
 
+
     return meeting;
   }
+
 
   async completeMeeting(
     meetingId: string,
@@ -253,19 +293,23 @@ export class MeetingsService {
   ): Promise<Meeting> {
     const meeting = await this.meetingModel.findById(meetingId).populate('participants');
 
+
     if (!meeting) {
       throw new NotFoundException('Meeting not found');
     }
 
+
     const endTime = new Date();
     const startTime = meeting.actualStartTime || new Date(meeting.scheduledDate);
     const durationInMinutes = Math.round((endTime.getTime() - startTime.getTime()) / (1000 * 60));
+
 
     // Process attendees with duration calculations
     const processedAttendees = (transcriptData.attendees || []).map(attendee => {
       const joinTime = new Date(attendee.joinedAt);
       const leaveTime = attendee.leftAt ? new Date(attendee.leftAt) : endTime;
       const attendeeDuration = Math.round((leaveTime.getTime() - joinTime.getTime()) / (1000 * 60));
+
 
       return {
         userId: new Types.ObjectId(attendee.userId),
@@ -274,6 +318,7 @@ export class MeetingsService {
         duration: attendeeDuration,
       };
     });
+
 
     meeting.status = 'completed';
     meeting.actualEndTime = endTime;
@@ -297,7 +342,9 @@ export class MeetingsService {
       attendees: processedAttendees,
     };
 
+
     await meeting.save();
+
 
     // Notify all participants that meeting has ended with transcript info
     await this.notificationsService.createMeetingEndedNotification(
@@ -311,8 +358,10 @@ export class MeetingsService {
       (meeting.participants as any[]).map((p: any) => p._id),
     );
 
+
     return meeting;
   }
+
 
   async getMeetingTranscript(meetingId: string, userId: string): Promise<any> {
     const meeting = await this.meetingModel
@@ -323,22 +372,27 @@ export class MeetingsService {
       .populate('transcript.tasksCreated.taskId')
       .exec();
 
+
     if (!meeting) {
       throw new NotFoundException('Meeting not found');
     }
+
 
     // Check if user is a participant
     const isParticipant = (meeting.participants as any[]).some(
       (p: any) => p._id.toString() === userId,
     );
 
+
     if (!isParticipant && meeting.createdBy.toString() !== userId) {
       throw new ForbiddenException('You can only view transcripts of meetings you participated in');
     }
 
+
     if (!meeting.transcript) {
       throw new NotFoundException('Meeting transcript not available');
     }
+
 
     return {
       meeting: {
